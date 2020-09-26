@@ -58,6 +58,7 @@
     "rimraf": "^3.0.0",
     "signal-exit": "^3.0.3",
     "strip-ansi": "^6.0.0",
+    "skypack": "^0.0.1",
     "strip-comments": "^2.0.1",
     "tar": "^6.0.1",
     "validate-npm-package-name": "^3.0.0",
