@@ -6,7 +6,6 @@ import http from 'http';
 import {validate, ValidatorResult} from 'jsonschema';
 import path from 'path';
 import yargs from 'yargs-parser';
-
 import srcFileExtensionMapping from './build/src-file-extension-mapping';
 import {logger} from './logger';
 import {esbuildPlugin} from './plugins/plugin-esbuild';

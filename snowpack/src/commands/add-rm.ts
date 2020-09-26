@@ -2,10 +2,11 @@ import {promises as fs} from 'fs';
 import got from 'got';
 import path from 'path';
 import {CommandOptions} from '../types/snowpack';
-import {command as installCommand} from './install';
+import {generateImportMap} from 'skypack';
+import {writeLockfile} from '../util';
 
 export async function addCommand(addValue: string, commandOptions: CommandOptions) {
-  const {cwd, config, pkgManifest} = commandOptions;
+  const {cwd, config, lockfile, pkgManifest} = commandOptions;
   let [pkgName, pkgSemver] = addValue.split('@');
   if (!pkgSemver) {
     const body = (await got(`http://registry.npmjs.org/${pkgName}/latest`).json()) as any;
@@ -15,17 +16,21 @@ export async function addCommand(addValue: string, commandOptions: CommandOption
   pkgManifest.webDependencies[pkgName] = pkgSemver;
   config.webDependencies = config.webDependencies || {};
   config.webDependencies[pkgName] = pkgSemver;
+  delete pkgManifest.dependencies[pkgName];
+  delete pkgManifest.devDependencies[pkgName];
   await fs.writeFile(path.join(cwd, 'package.json'), JSON.stringify(pkgManifest, null, 2));
-  await installCommand(commandOptions);
+  const newLockfile = await generateImportMap(config.webDependencies, lockfile || undefined);
+  await writeLockfile(path.join(cwd, 'snowpack.lock.json'), newLockfile);
 }
 
 export async function rmCommand(addValue: string, commandOptions: CommandOptions) {
-  const {cwd, config, pkgManifest} = commandOptions;
+  const {cwd, config, lockfile, pkgManifest} = commandOptions;
   let [pkgName] = addValue.split('@');
   pkgManifest.webDependencies = pkgManifest.webDependencies || {};
   delete pkgManifest.webDependencies[pkgName];
   config.webDependencies = config.webDependencies || {};
   delete config.webDependencies[pkgName];
   await fs.writeFile(path.join(cwd, 'package.json'), JSON.stringify(pkgManifest, null, 2));
-  await installCommand(commandOptions);
+  const newLockfile = await generateImportMap(config.webDependencies, lockfile || undefined);
+  await writeLockfile(path.join(cwd, 'snowpack.lock.json'), newLockfile);
 }

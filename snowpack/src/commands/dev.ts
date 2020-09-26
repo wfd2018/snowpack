@@ -26,10 +26,9 @@
 
 import cacache from 'cacache';
 import isCompressible from 'compressible';
-import merge from 'deepmerge';
 import etag from 'etag';
 import {EventEmitter} from 'events';
-import {createReadStream, existsSync, promises as fs, statSync} from 'fs';
+import {createReadStream, promises as fs, statSync} from 'fs';
 import got from 'got';
 import http from 'http';
 import HttpProxy from 'http-proxy';
@@ -41,6 +40,7 @@ import os from 'os';
 import path from 'path';
 import {performance} from 'perf_hooks';
 import onProcessExit from 'signal-exit';
+import {buildNewPackage, fetchCDN, lookupBySpecifier} from 'skypack';
 import stream from 'stream';
 import url from 'url';
 import util from 'util';
@@ -66,7 +66,6 @@ import {matchDynamicImportValue} from '../scan-imports';
 import {CommandOptions, ImportMap, SnowpackBuildMap, SnowpackConfig} from '../types/snowpack';
 import {
   BUILD_CACHE,
-  checkLockfileHash,
   cssSourceMappingURL,
   DEV_DEPENDENCIES_DIR,
   getExt,
@@ -78,9 +77,7 @@ import {
   readFile,
   replaceExt,
   resolveDependencyManifest,
-  updateLockfileHash,
 } from '../util';
-import {command as installCommand} from './install';
 import {getPort, paint, paintEvent} from './paint';
 
 const DEFAULT_PROXY_ERROR_HANDLER = (
@@ -126,6 +123,16 @@ class InMemoryBuildCache {
     this.getCache(true).clear();
     this.getCache(false).clear();
   }
+}
+
+function parseRawPackageImport(spec: string): [string, string | null] {
+  const impParts = spec.split('/');
+  if (spec.startsWith('@')) {
+    const [scope, name, ...rest] = impParts;
+    return [`${scope}/${name}`, rest.join('/') || null];
+  }
+  const [name, ...rest] = impParts;
+  return [name, rest.join('/') || null];
 }
 
 function shouldProxy(pathPrefix: string, req: http.IncomingMessage) {
@@ -239,7 +246,7 @@ function getUrlFromFile(
 }
 
 export async function startServer(commandOptions: CommandOptions) {
-  const {cwd, config} = commandOptions;
+  const {cwd, config, lockfile} = commandOptions;
   const {port: defaultPort, hostname, open} = config.devOptions;
   const isHmr = typeof config.devOptions.hmr !== 'undefined' ? config.devOptions.hmr : true;
 
@@ -281,26 +288,26 @@ export async function startServer(commandOptions: CommandOptions) {
 
   // Set the proper install options, in case an install is needed.
   const dependencyImportMapLoc = path.join(DEV_DEPENDENCIES_DIR, 'import-map.json');
-  logger.debug(`Using cache folder: ${path.relative(cwd, DEV_DEPENDENCIES_DIR)}`);
-  const installCommandOptions = merge(commandOptions, {
-    config: {
-      installOptions: {
-        dest: DEV_DEPENDENCIES_DIR,
-        env: {NODE_ENV: process.env.NODE_ENV || 'development'},
-        treeshake: false,
-      },
-    },
-  });
+  // logger.debug(`Using cache folder: ${path.relative(cwd, DEV_DEPENDENCIES_DIR)}`);
+  // const installCommandOptions = merge(commandOptions, {
+  //   config: {
+  //     installOptions: {
+  //       dest: DEV_DEPENDENCIES_DIR,
+  //       env: {NODE_ENV: process.env.NODE_ENV || 'development'},
+  //       treeshake: false,
+  //     },
+  //   },
+  // });
 
-  // Start with a fresh install of your dependencies, if needed.
-  if (!(await checkLockfileHash(DEV_DEPENDENCIES_DIR)) || !existsSync(dependencyImportMapLoc)) {
-    logger.debug('Cache out of date or missing. Updating…');
-    logger.info(colors.yellow('! updating dependencies...'));
-    await installCommand(installCommandOptions);
-    await updateLockfileHash(DEV_DEPENDENCIES_DIR);
-  } else {
-    logger.debug(`Cache up-to-date. Using existing cache`);
-  }
+  // // Start with a fresh install of your dependencies, if needed.
+  // if (!(await checkLockfileHash(DEV_DEPENDENCIES_DIR)) || !existsSync(dependencyImportMapLoc)) {
+  //   logger.debug('Cache out of date or missing. Updating…');
+  //   logger.info(colors.yellow('! updating dependencies...'));
+  //   await installCommand(installCommandOptions);
+  //   await updateLockfileHash(DEV_DEPENDENCIES_DIR);
+  // } else {
+  //   logger.debug(`Cache up-to-date. Using existing cache`);
+  // }
 
   let dependencyImportMap: ImportMap = {imports: {}};
   try {
@@ -380,6 +387,51 @@ export async function startServer(commandOptions: CommandOptions) {
     }
   }
 
+  async function fetchWebModule(installUrl: string): Promise<string> {
+    let body: string;
+    if (
+      installUrl.startsWith('/-/') ||
+      installUrl.startsWith('/pin/') ||
+      installUrl.startsWith('/new/') ||
+      installUrl.startsWith('/error/')
+    ) {
+      body = (await fetchCDN(installUrl)).body;
+    } else {
+      const [packageName, packagePath] = parseRawPackageImport(installUrl.substr(1));
+      if (lockfile && lockfile.imports[installUrl.substr(1)]) {
+        body = (await fetchCDN(lockfile.imports[installUrl.substr(1)])).body;
+      } else if (lockfile && lockfile.imports[packageName + '/']) {
+        body = (await fetchCDN(lockfile.imports[packageName + '/'] + packagePath)).body;
+      } else {
+        const _packageSemver = config.webDependencies && config.webDependencies[packageName];
+        if (_packageSemver) {
+          logger.warn(
+            `${packageName} not found in your snowpack.lock.json lockfile. Fetching ${packageName}@${_packageSemver}...`,
+          );
+        } else {
+          logger.warn(
+            `${packageName} not found in your package.json "webDependencies". Fetching ${packageName}@latest...`,
+          );
+        }
+        const packageSemver = _packageSemver || 'latest';
+        let lookupResponse = await lookupBySpecifier(installUrl.substr(1), packageSemver);
+        if (!lookupResponse.error && lookupResponse.importStatus === 'NEW') {
+          const buildResponse = await buildNewPackage(installUrl.substr(1), packageSemver);
+          if (!buildResponse.success) {
+            throw new Error('Package could not be built!');
+          }
+          lookupResponse = await lookupBySpecifier(installUrl.substr(1), packageSemver);
+        }
+        if (lookupResponse.error) {
+          throw lookupResponse.error;
+        }
+        body = lookupResponse.body;
+      }
+    }
+    return (body as string)
+      .replace(/(from|import) \'\//g, `$1 '/__snowpack__/web_modules/`)
+      .replace(/(from|import) \"\//g, `$1 "/__snowpack__/web_modules/`);
+  }
   async function requestHandler(req: http.IncomingMessage, res: http.ServerResponse) {
     const reqUrl = req.url!;
     const reqUrlHmrParam = reqUrl.includes('?mtime=') && reqUrl.split('?')[1];
@@ -418,6 +470,12 @@ export async function startServer(commandOptions: CommandOptions) {
     }
     if (reqPath === getMetaUrlPath('/env.js', config)) {
       sendFile(req, res, generateEnvModule('development'), reqPath, '.js');
+      return;
+    }
+    const webModulePrefix = getMetaUrlPath('web_modules', config);
+    if (reqPath.startsWith(getMetaUrlPath('/web_modules/', config))) {
+      const code = await fetchWebModule(reqPath.substr(webModulePrefix.length));
+      sendFile(req, res, code, reqPath, '.js');
       return;
     }
 
@@ -607,7 +665,6 @@ export async function startServer(commandOptions: CommandOptions) {
     ): Promise<string> {
       const resolveImportSpecifier = createImportResolver({
         fileLoc,
-        dependencyImportMap,
         config,
       });
       wrappedResponse = await transformFileImports(

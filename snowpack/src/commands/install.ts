@@ -4,10 +4,10 @@ import util from 'util';
 import path from 'path';
 import {performance} from 'perf_hooks';
 import {logger} from '../logger';
-import {resolveTargetsFromRemoteCDN} from '../resolve-remote.js';
 import {scanDepList, scanImports, scanImportsFromFiles} from '../scan-imports.js';
 import {CommandOptions, ImportMap, SnowpackConfig, SnowpackSourceFile} from '../types/snowpack';
 import {writeLockfile} from '../util.js';
+import {generateImportMap, rollupPluginSkypack} from 'skypack';
 
 const cwd = process.cwd();
 
@@ -15,13 +15,10 @@ export async function getInstallTargets(
   config: SnowpackConfig,
   scannedFiles?: SnowpackSourceFile[],
 ) {
-  const {knownEntrypoints, webDependencies} = config;
+  const {knownEntrypoints} = config;
   const installTargets: InstallTarget[] = [];
   if (knownEntrypoints) {
     installTargets.push(...scanDepList(knownEntrypoints, cwd));
-  }
-  if (webDependencies) {
-    installTargets.push(...scanDepList(Object.keys(webDependencies), cwd));
   }
   // TODO: remove this if block; move logic inside scanImports
   if (scannedFiles) {
@@ -93,7 +90,7 @@ export async function run({
 
   let newLockfile: ImportMap | null = null;
   if (webDependencies && Object.keys(webDependencies).length > 0) {
-    newLockfile = await resolveTargetsFromRemoteCDN(lockfile, config).catch((err) => {
+    newLockfile = await generateImportMap(webDependencies, lockfile || undefined).catch((err) => {
       logger.error('\n' + err.message || err);
       process.exit(1);
     });
@@ -110,6 +107,9 @@ export async function run({
       error: (...args: [any, ...any[]]) => logger.error(util.format(...args)),
     },
     ...config.installOptions,
+    rollup: {
+      plugins: [rollupPluginSkypack({installTypes: false})],
+    },
   }).catch((err) => {
     if (err.loc) {
       logger.error(colors.red(colors.bold(`✘ ${err.loc.file}`)));

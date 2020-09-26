@@ -2,19 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import url from 'url';
 import {ImportMap, SnowpackConfig} from '../types/snowpack';
-import {
-  findMatchingAliasEntry,
-  getExt,
-  relativeURL,
-  replaceExt,
-} from '../util';
+import {findMatchingAliasEntry, getExt, relativeURL, replaceExt} from '../util';
 import srcFileExtensionMapping from './src-file-extension-mapping';
 
 const cwd = process.cwd();
 
 interface ImportResolverOptions {
   fileLoc: string;
-  dependencyImportMap: ImportMap | null | undefined;
+  importMap?: ImportMap | null;
   config: SnowpackConfig;
 }
 
@@ -50,11 +45,7 @@ function resolveSourceSpecifier(spec: string, stats: fs.Stats | false, config: S
  * to a proper URL. Returns false if no matching import was found, which usually indicates a package
  * not found in the import map.
  */
-export function createImportResolver({
-  fileLoc,
-  dependencyImportMap,
-  config,
-}: ImportResolverOptions) {
+export function createImportResolver({fileLoc, config, importMap}: ImportResolverOptions) {
   return function importResolver(spec: string): string | false {
     // Ignore "http://*" imports
     if (url.parse(spec).protocol) {
@@ -66,6 +57,13 @@ export function createImportResolver({
       return spec;
     }
 
+    if (importMap && importMap.imports[spec]) {
+      const mappedImport = importMap.imports[spec];
+      if (url.parse(mappedImport).protocol) {
+        return mappedImport;
+      }
+      return path.posix.join('/', config.buildOptions.metaDir, 'web_modules', mappedImport);
+    }
     if (spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../')) {
       const importStats = getImportStats(path.dirname(fileLoc), spec);
       spec = resolveSourceSpecifier(spec, importStats, config);
@@ -81,14 +79,6 @@ export function createImportResolver({
       result = relativeURL(path.dirname(fileLoc), result);
       return result;
     }
-    if (dependencyImportMap) {
-      // NOTE: We don't need special handling for an alias here, since the aliased "from"
-      // is already the key in the import map. The aliased "to" value is also an entry.
-      const importMapEntry = dependencyImportMap.imports[spec];
-      if (importMapEntry) {
-        return path.posix.resolve(config.buildOptions.webModulesUrl, importMapEntry);
-      }
-    }
-    return false;
+    return path.posix.join('/', config.buildOptions.metaDir, 'web_modules', spec);
   };
 }

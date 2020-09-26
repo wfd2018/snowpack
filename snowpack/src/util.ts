@@ -5,16 +5,15 @@ import execa from 'execa';
 import projectCacheDir from 'find-cache-dir';
 import findUp from 'find-up';
 import fs from 'fs';
-import got, {CancelableRequest, Response} from 'got';
 import {isBinaryFile} from 'isbinaryfile';
 import mkdirp from 'mkdirp';
 import open from 'open';
 import path from 'path';
 import rimraf from 'rimraf';
+import {clearCache as clearSkypackCache} from 'skypack';
 import validatePackageName from 'validate-npm-package-name';
 import {ImportMap, SnowpackConfig} from './types/snowpack';
 
-export const PIKA_CDN = `https://cdn.pika.dev`;
 export const GLOBAL_CACHE_DIR = globalCacheDir('snowpack');
 
 // A note on cache naming/versioning: We currently version our global caches
@@ -22,14 +21,12 @@ export const GLOBAL_CACHE_DIR = globalCacheDir('snowpack');
 // same cache across versions until something in the data structure changes.
 // At that point, bump the version in the cache name to create a new unique
 // cache name.
-export const RESOURCE_CACHE = path.join(GLOBAL_CACHE_DIR, 'pkg-cache-1.4');
 export const BUILD_CACHE = path.join(GLOBAL_CACHE_DIR, 'build-cache-2.7');
 
 export const PROJECT_CACHE_DIR = projectCacheDir({name: 'snowpack'});
 export const DEV_DEPENDENCIES_DIR = path.join(PROJECT_CACHE_DIR, 'dev');
 const LOCKFILE_HASH_FILE = '.hash';
 
-export const HAS_CDN_HASH_REGEX = /\-[a-zA-Z0-9]{16,}/;
 // NOTE(fks): Must match empty script elements to work properly.
 export const HTML_JS_REGEX = /(<script[^>]*?type="module".*?>)(.*?)<\/script>/gims;
 export const CSS_REGEX = /@import\s*['"](.*?)['"];/gs;
@@ -56,26 +53,7 @@ export async function readLockfile(cwd: string): Promise<ImportMap | null> {
 }
 
 export async function writeLockfile(loc: string, importMap: ImportMap): Promise<void> {
-  const sortedImportMap: ImportMap = {imports: {}};
-  for (const key of Object.keys(importMap.imports).sort()) {
-    sortedImportMap.imports[key] = importMap.imports[key];
-  }
-  fs.writeFileSync(loc, JSON.stringify(sortedImportMap, undefined, 2), {encoding: 'utf-8'});
-}
-
-export function fetchCDNResource(
-  resourceUrl: string,
-  responseType?: 'text' | 'json' | 'buffer',
-): Promise<CancelableRequest<Response>> {
-  if (!resourceUrl.startsWith(PIKA_CDN)) {
-    resourceUrl = PIKA_CDN + resourceUrl;
-  }
-  // @ts-ignore - TS doesn't like responseType being unknown amount three options
-  return got(resourceUrl, {
-    responseType: responseType,
-    headers: {'user-agent': `snowpack/v1.4 (https://snowpack.dev)`},
-    throwHttpErrors: false,
-  });
+  fs.writeFileSync(loc, JSON.stringify(importMap, undefined, 2), {encoding: 'utf-8'});
 }
 
 export function isTruthy<T>(item: T | false | null | undefined): item is T {
@@ -256,7 +234,7 @@ export async function updateLockfileHash(dir: string) {
 
 export async function clearCache() {
   return Promise.all([
-    cacache.rm.all(RESOURCE_CACHE),
+    clearSkypackCache(),
     cacache.rm.all(BUILD_CACHE),
     rimraf.sync(PROJECT_CACHE_DIR),
   ]);
@@ -393,7 +371,7 @@ export function appendHTMLToBody(doc: string, htmlToAdd: string) {
   return doc.replace(closingBodyMatch[0], htmlToAdd + closingBodyMatch[0]);
 }
 
-/** Add / to beginning of string (but don’t double-up) */
+/** Add / to the start of string (but don’t double-up) */
 export function addLeadingSlash(path: string) {
   return path.replace(/^\/?/, '/');
 }
