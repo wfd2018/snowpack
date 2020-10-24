@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "version": "1.0.1",
+  "name": "@snowpack/test-optimize-plugin",
+  "description": "Tests @snowpack/plugin-optimize",
+  "scripts": {
+    "testbuild": "snowpack build"
+  },
+  "dependencies": {
+    "bootstrap": "^5.0.0-alpha2"
+  },
+  "devDependencies": {
+    "@snowpack/plugin-optimize": "^0.2.6",
+    "@snowpack/plugin-sass": "^1.1.1",
+    "snowpack": "^2.14.3"
+  }
+}
